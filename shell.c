@@ -9,6 +9,12 @@
 #define USER_INPUT_LEN (2048)
 #define ARG_NUM (256)
 
+/*
+ *  Program that acts as a shell for Linux
+ *  Handles firing up processes and directory
+ *  management.
+ */
+
 int main(int argc, char* argv[])
 {
     /* Variable declarations */
@@ -16,23 +22,32 @@ int main(int argc, char* argv[])
     char* commandArgs[ARG_NUM]; /* Max number */
     char* buffer;
     
+    /*
+     * We need a place to store the directory we're in, the 
+     * previous directory, and a buffer for swapping them.
+     */
     char currWorkDir[USER_INPUT_LEN];
     char prevWorkDir[USER_INPUT_LEN];
     char buffWorkDir[USER_INPUT_LEN];
     
+    // Keep track of the number of arguments
     int numOfArgs = 0;
+    
+    // Keep track of the ID of a child when we fork
     pid_t childPid = 0;
     
+    // Initialize the prev Working Dir with the current
+    // So that it isn't null.
     getcwd(prevWorkDir, sizeof(prevWorkDir));
     
     while(1) /* Repeat forever */
     {
-        
+        // Reset after every loop
         numOfArgs = 0;
+        childPid = 0;
                 
         /* Working Environment Dir */
         getcwd(currWorkDir, sizeof(currWorkDir));
-        
         
         /* Display a prompt */
         fprintf(stdout, "%s%% ", currWorkDir);
@@ -57,17 +72,20 @@ int main(int argc, char* argv[])
         
         buffer = strtok(userInput, " \n");       
         commandArgs[0] = buffer;
-               
+        
+        // While we still have things to parse
         while(buffer)
         {
             if (buffer)
             {
                 // Won't count the null, so (numOfArgs-1) is the loc
-                // of the last arg
+                // of the last arg, and numOfArgs is how many
                 numOfArgs++;
             }
-            buffer = strtok(NULL, " ");                      
-            commandArgs[numOfArgs] = buffer;  // Will be NULL term
+            buffer = strtok(NULL, " ");  
+            // Even if strtoke returns null, we want to add it to the arguments
+            // So that it is null terminated.
+            commandArgs[numOfArgs] = buffer;
             
         }
         
@@ -80,12 +98,13 @@ int main(int argc, char* argv[])
         if(commandArgs[0])
         {
             
-            /* If the user entered 'exit' then call the exit() system call
+            /*
+             * If the user entered 'exit' then call the exit() system call
              * to terminate the process
              */
             if(!strcmp(commandArgs[0],"exit"))
             { 
-                exit(1);
+                exit(EXIT_SUCCESS);
             }
 
             /* 
@@ -93,22 +112,13 @@ int main(int argc, char* argv[])
              */
             else if(!strcmp(commandArgs[0],"cd"))
             {
-                // Catching just CD, otherwise strcmp will segv
-                // This operates like "cd -", toggling between dir
-                if(commandArgs[1] == NULL)
+                // Switch between current and previous dir
+                if(!commandArgs[1] || !strcmp(commandArgs[1], "-"))
                 {
                     strcpy(buffWorkDir,prevWorkDir);
                     strcpy(prevWorkDir,currWorkDir);
                     strcpy(currWorkDir,buffWorkDir);
                     chdir(currWorkDir);
-                }
-                // Toggle between two dir
-                else if(!strcmp(commandArgs[1], "-"))
-                {
-                    strcpy(buffWorkDir,prevWorkDir);
-                    strcpy(prevWorkDir,currWorkDir);
-                    strcpy(currWorkDir,buffWorkDir);
-                    chdir(currWorkDir);                   
                 }
                 // HOME
                 else if(!strcmp(commandArgs[1], "~"))
@@ -116,24 +126,19 @@ int main(int argc, char* argv[])
                     getcwd(prevWorkDir, sizeof(prevWorkDir));
                     chdir(getenv("HOME"));
                 }
-                
-                // UP a level
-                else if(!strcmp(commandArgs[1], ".."))
-                {
-                    getcwd(prevWorkDir, sizeof(prevWorkDir));
-                    chdir(commandArgs[1]);
-                    getcwd(currWorkDir, sizeof(currWorkDir));
-                }
-                // Absolute Path
+                // Absolute Path and ".." command
                 else if(commandArgs[1])
                 {
                     getcwd(prevWorkDir, sizeof(prevWorkDir));
                     chdir(commandArgs[1]);
                     getcwd(currWorkDir, sizeof(currWorkDir));                   
                 }
+                
                 setenv("PWD", currWorkDir, 1);
                 setenv("OLDPWD", prevWorkDir, 1);
+                
                 // Cleanly handle a non-existant function
+                // This will be thrown by chdir if its set
                 if (errno)
                 {
                     fprintf(stderr, "ERROR: %s\n", strerror(errno));
@@ -148,7 +153,7 @@ int main(int argc, char* argv[])
              */
             else
             {
-                //fprintf(stdout, "FORK!\n");
+                // Fork and if we're the parent, it won't be zero
                 childPid = fork();
                 
                 if (!childPid) /* We forked no child, we ARE the child */
@@ -158,32 +163,35 @@ int main(int argc, char* argv[])
                      * the process' memory with the executable command the 
                      * user has asked for.  
                      */
-                    //fprintf(stdout, "Got Here: Child\n");
                     
+                    // If the last argument is an &, overwrite it
+                    // With a NULL and run as detached.
                     if(!strcmp(commandArgs[numOfArgs-1],"&"))
                     {
-                        commandArgs[numOfArgs-1] = NULL;
-                        execvp(commandArgs[0], commandArgs);
+                        commandArgs[numOfArgs-1] = NULL;                       
+                        // This removes us from the same session as the parent
                         setsid();                       
-                    }             
+                    } 
+                    
                     execvp(commandArgs[0], commandArgs);
                     
                     // Cleanly handle a non-existant function
                     if (errno)
                     {
                         fprintf(stderr, "ERROR: %s\n", strerror(errno));
-                        exit(errno);
+                        exit(EXIT_FAILURE);
                     }
-                    exit(1);
+                    exit(EXIT_SUCCESS);
                 }
                 
+                // If the fork failed for some reason
                 else if (childPid == -1) 
                 {
                     /* An error occured during the fork - print it */
                     fprintf(stderr, "ERROR: %s\n", strerror(errno));
-                    exit(errno);
                 }
                 
+                // If we're the parent
                 else /* childPid is the PID of the child */
                 {
                     /* We're still executing in the parent process.
@@ -194,17 +202,15 @@ int main(int argc, char* argv[])
                     {
                         waitpid(childPid, NULL, 0);
                     }
+                    // If its a background process, we don't wait
+                    // But print the PID
                     else
                     {
                         fprintf(stdout, "Job %d\n", childPid);
                     }
                 }
             }
-
-        }
-
-       
-
+        }  
     } /* while */
-    return 0;
+    return 1;
 } /* my shell */
